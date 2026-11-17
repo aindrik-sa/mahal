@@ -1,0 +1,299 @@
+// Mahall — Phase 1 schema.
+// Every masjid-owned record carries masjidId for tenant isolation.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  RESIDENT
+}
+
+enum Status {
+  ACTIVE
+  INACTIVE
+}
+
+enum Gender {
+  MALE
+  FEMALE
+}
+
+enum BoardStatus {
+  ACTIVE
+  PREVIOUS
+}
+
+model Masjid {
+  id        String   @id @default(cuid())
+  name      String
+  address   String?
+  phone     String?
+  createdAt DateTime @default(now())
+
+  // Counters for human-readable IDs (FAM-0001, MEM-0001)
+  familySeq  Int @default(0)
+  memberSeq  Int @default(0)
+  receiptSeq Int @default(0)
+
+  users        User[]
+  families     Family[]
+  members      Member[]
+  boardMembers BoardMember[]
+  auditLogs    AuditLog[]
+  plans        SubscriptionPlan[]
+  invoices     SubscriptionInvoice[]
+  payments     Payment[]
+}
+
+model User {
+  id           String    @id @default(cuid())
+  masjidId     String?
+  masjid       Masjid?   @relation(fields: [masjidId], references: [id])
+  email        String?   @unique
+  phone        String?   @unique
+  name         String
+  passwordHash String?
+  role         Role      @default(RESIDENT)
+  isActive     Boolean   @default(true)
+  // Invitation-based activation: admin creates user, resident sets password.
+  inviteToken  String?   @unique
+  inviteExpiry DateTime?
+  resetToken   String?   @unique
+  resetExpiry  DateTime?
+  memberId     String?   @unique
+  member       Member?   @relation(fields: [memberId], references: [id])
+  createdAt    DateTime  @default(now())
+  lastLoginAt  DateTime?
+
+  sessions          Session[]
+  auditLogs         AuditLog[]
+  paymentsSubmitted Payment[]  @relation("PaymentSubmitter")
+  paymentsVerified  Payment[]  @relation("PaymentVerifier")
+
+  @@index([masjidId])
+}
+
+model Session {
+  id        String   @id // sha256 of the cookie token
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model Family {
+  id               String   @id @default(cuid())
+  masjidId         String
+  masjid           Masjid   @relation(fields: [masjidId], references: [id])
+  familyCode       String // FAM-0001, unique within masjid
+  familyName       String
+  houseName        String?
+  houseNumber      String?
+  address          String?
+  ward             String?
+  headMemberId     String?  @unique
+  headMember       Member?  @relation("FamilyHead", fields: [headMemberId], references: [id])
+  primaryPhone     String?
+  secondaryPhone   String?
+  registrationDate DateTime @default(now())
+  status           Status   @default(ACTIVE)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  members Member[] @relation("FamilyMembers")
+
+  // Exempt families are skipped when monthly invoices are generated.
+  subscriptionExempt Boolean               @default(false)
+  exemptReason       String?
+  invoices           SubscriptionInvoice[]
+  payments           Payment[]
+
+  @@unique([masjidId, familyCode])
+  @@unique([masjidId, houseNumber, ward])
+  @@index([masjidId, familyName])
+}
+
+model Member {
+  id               String    @id @default(cuid())
+  masjidId         String
+  masjid           Masjid    @relation(fields: [masjidId], references: [id])
+  memberCode       String // MEM-0001
+  familyId         String
+  family           Family    @relation("FamilyMembers", fields: [familyId], references: [id])
+  fullName         String
+  gender           Gender
+  dateOfBirth      DateTime?
+  phone            String?
+  email            String?
+  relationship     String // Head, Wife, Son, Daughter, ...
+  address          String?
+  status           Status    @default(ACTIVE)
+  registrationDate DateTime  @default(now())
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  headOf Family? @relation("FamilyHead")
+  user   User?
+
+  @@unique([masjidId, memberCode])
+  @@index([masjidId, fullName])
+  @@index([familyId])
+}
+
+model BoardMember {
+  id          String      @id @default(cuid())
+  masjidId    String
+  masjid      Masjid      @relation(fields: [masjidId], references: [id])
+  fullName    String
+  photoUrl    String?
+  designation String
+  phone       String?
+  email       String?
+  showContact Boolean     @default(true) // approved for display to residents
+  termStart   DateTime
+  termEnd     DateTime?
+  status      BoardStatus @default(ACTIVE)
+  sortOrder   Int         @default(100)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@index([masjidId, status])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  masjidId   String
+  masjid     Masjid   @relation(fields: [masjidId], references: [id])
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+  action     String // e.g. family.create
+  entityType String
+  entityId   String?
+  summary    String
+  data       Json?
+  createdAt  DateTime @default(now())
+
+  @@index([masjidId, createdAt])
+}
+
+// ───────────── Phase 2: subscriptions & manual payments ─────────────
+// Amounts are whole rupees (Int).
+
+model SubscriptionPlan {
+  id            String   @id @default(cuid())
+  masjidId      String
+  masjid        Masjid   @relation(fields: [masjidId], references: [id])
+  name          String // e.g. "FY 2026-27"
+  startMonth    DateTime // first day of the first billing month
+  months        Int      @default(12)
+  annualAmount  Int
+  monthlyAmount Int
+  dueDay        Int      @default(10) // day of month the installment is due
+  graceDays     Int      @default(5)
+  lateFee       Int      @default(0) // flat fee per overdue installment
+  upiId         String? // masjid UPI ID shown to residents
+  upiName       String?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  invoices SubscriptionInvoice[]
+
+  @@index([masjidId, isActive])
+}
+
+enum InvoiceStatus {
+  PENDING
+  PARTIAL
+  PAID
+  WAIVED
+}
+
+model SubscriptionInvoice {
+  id          String           @id @default(cuid())
+  masjidId    String
+  masjid      Masjid           @relation(fields: [masjidId], references: [id])
+  planId      String
+  plan        SubscriptionPlan @relation(fields: [planId], references: [id])
+  familyId    String
+  family      Family           @relation(fields: [familyId], references: [id])
+  periodMonth DateTime // first day of the month this installment covers
+  dueDate     DateTime
+  amount      Int
+  lateFee     Int              @default(0) // applied once the installment passes due date + grace
+  paidAmount  Int              @default(0)
+  status      InvoiceStatus    @default(PENDING)
+  note        String? // waiver reason / adjustment note
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  allocations PaymentAllocation[]
+
+  @@unique([planId, familyId, periodMonth])
+  @@index([masjidId, status, dueDate])
+  @@index([familyId])
+}
+
+enum PaymentMethod {
+  UPI_MANUAL
+  CASH
+  BANK_TRANSFER
+}
+
+enum PaymentStatus {
+  PENDING_VERIFICATION
+  VERIFIED
+  REJECTED
+}
+
+model Payment {
+  id            String        @id @default(cuid())
+  masjidId      String
+  masjid        Masjid        @relation(fields: [masjidId], references: [id])
+  familyId      String
+  family        Family        @relation(fields: [familyId], references: [id])
+  amount        Int
+  method        PaymentMethod
+  reference     String? // UPI UTR / bank reference
+  paidOn        DateTime
+  status        PaymentStatus @default(PENDING_VERIFICATION)
+  receiptNo     String? // RCP-0001, assigned on verification
+  notes         String?
+  rejectReason  String?
+  submittedById String?
+  submittedBy   User?         @relation("PaymentSubmitter", fields: [submittedById], references: [id])
+  verifiedById  String?
+  verifiedBy    User?         @relation("PaymentVerifier", fields: [verifiedById], references: [id])
+  verifiedAt    DateTime?
+  createdAt     DateTime      @default(now())
+
+  allocations PaymentAllocation[]
+
+  @@unique([masjidId, reference])
+  @@unique([masjidId, receiptNo])
+  @@index([masjidId, status, createdAt])
+  @@index([familyId])
+}
+
+/// Which installments a payment covers. Applied to invoice.paidAmount only once the payment is verified.
+model PaymentAllocation {
+  id        String              @id @default(cuid())
+  paymentId String
+  payment   Payment             @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  invoiceId String
+  invoice   SubscriptionInvoice @relation(fields: [invoiceId], references: [id])
+  amount    Int
+
+  @@unique([paymentId, invoiceId])
+  @@index([invoiceId])
+}
