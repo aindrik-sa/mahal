@@ -6,6 +6,7 @@ import { audit } from "@/lib/audit";
 import { str, dateOrNull } from "@/lib/format";
 import { settlePayment, rupees, METHOD_LABEL } from "@/lib/billing";
 import { createPayment } from "@/lib/payments";
+import { notifyFamily } from "@/lib/notify";
 import type { ActionResult } from "@/components/action-form";
 import type { PaymentMethod } from "@prisma/client";
 
@@ -28,6 +29,7 @@ export async function recordPayment(_: ActionResult, fd: FormData): Promise<Acti
     submittedById: user.id, invoiceIds: fd.getAll("invoiceIds").map(String), verifyAs: user.id,
   });
   if ("error" in r) return { error: r.error };
+  await notifyFamily(user.masjidId, familyId, { title: "Payment received", body: `We received ${rupees(r.payment.amount)} (${METHOD_LABEL[method]}). Receipt ${r.payment.receiptNo}. Jazakallah khair.`, category: "PAYMENT" });
   await audit(user, "payment.record", "Payment", r.payment.id, `Recorded ${METHOD_LABEL[method]} payment ${rupees(r.payment.amount)} from ${fam.familyName} (${r.payment.receiptNo})`);
   revalidatePath(`/admin/subscriptions/family/${familyId}`);
   revalidatePath("/admin/payments");
@@ -39,12 +41,14 @@ export async function verifyPayment(_: ActionResult, fd: FormData): Promise<Acti
   const p = await db.payment.findFirst({ where: { id: String(fd.get("id")), masjidId: user.masjidId }, include: { family: true } });
   if (!p) return { error: "Payment not found" };
   if (p.status !== "PENDING_VERIFICATION") return { error: "This payment was already processed." };
+  let done;
   try {
-    const done = await db.$transaction((tx) => settlePayment(tx, p.id, user.id));
-    await audit(user, "payment.verify", "Payment", p.id, `Verified ${rupees(p.amount)} UPI payment from ${p.family.familyName} (ref ${p.reference}, ${done.receiptNo})`);
+    done = await db.$transaction((tx) => settlePayment(tx, p.id, user.id));
   } catch {
     return { error: "This payment was already processed." };
   }
+  await notifyFamily(user.masjidId, p.familyId, { title: "Payment verified", body: `Your UPI payment of ${rupees(p.amount)} (ref ${p.reference}) has been verified. Receipt ${done.receiptNo}.`, category: "PAYMENT" });
+  await audit(user, "payment.verify", "Payment", p.id, `Verified ${rupees(p.amount)} UPI payment from ${p.family.familyName} (ref ${p.reference}, ${done.receiptNo})`);
   revalidatePath("/admin/payments");
   return { ok: "Verified." };
 }
@@ -63,6 +67,7 @@ export async function rejectPayment(_: ActionResult, fd: FormData): Promise<Acti
       notes: [p.notes, p.reference && `Submitted reference: ${p.reference}`].filter(Boolean).join("\n") || null },
   });
   if (!r.count) return { error: "This payment was already processed." };
+  await notifyFamily(user.masjidId, p.familyId, { title: "Payment could not be verified", body: `Your payment of ${rupees(p.amount)} (ref ${p.reference}) was not verified: ${reason}. Please check the transaction ID and submit again, or contact the Mahall office.`, category: "PAYMENT", priority: "IMPORTANT" });
   await audit(user, "payment.reject", "Payment", p.id, `Rejected ${rupees(p.amount)} payment from ${p.family.familyName} (ref ${p.reference}): ${reason}`);
   revalidatePath("/admin/payments");
   return { ok: "Rejected." };

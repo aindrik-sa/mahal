@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-export type NavItem = { href: string; label: string; soon?: boolean; exact?: boolean };
+export type NavItem = { href: string; label: string; soon?: boolean; exact?: boolean; badge?: number };
 
 export function NavLinks({ items }: { items: NavItem[] }) {
   const path = usePathname();
@@ -20,6 +20,7 @@ export function NavLinks({ items }: { items: NavItem[] }) {
           <Link key={it.href} href={it.href}
             className={`whitespace-nowrap rounded-lg px-3 py-2 text-sm ${active ? "bg-emerald-50 text-emerald-800 font-medium" : "text-stone-700 hover:bg-stone-100"}`}>
             {it.label}
+            {!!it.badge && <span className="ml-2 inline-flex min-w-5 justify-center rounded-full bg-red-600 px-1.5 text-xs font-semibold text-white">{it.badge > 99 ? "99+" : it.badge}</span>}
           </Link>
         );
       })}

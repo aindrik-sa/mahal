@@ -42,15 +42,18 @@ model Masjid {
   familySeq  Int @default(0)
   memberSeq  Int @default(0)
   receiptSeq Int @default(0)
+  meetingSeq Int @default(0)
 
-  users        User[]
-  families     Family[]
-  members      Member[]
-  boardMembers BoardMember[]
-  auditLogs    AuditLog[]
-  plans        SubscriptionPlan[]
-  invoices     SubscriptionInvoice[]
-  payments     Payment[]
+  users         User[]
+  families      Family[]
+  members       Member[]
+  boardMembers  BoardMember[]
+  auditLogs     AuditLog[]
+  plans         SubscriptionPlan[]
+  invoices      SubscriptionInvoice[]
+  payments      Payment[]
+  notifications Notification[]
+  meetings      Meeting[]
 }
 
 model User {
@@ -73,10 +76,13 @@ model User {
   createdAt    DateTime  @default(now())
   lastLoginAt  DateTime?
 
-  sessions          Session[]
-  auditLogs         AuditLog[]
-  paymentsSubmitted Payment[]  @relation("PaymentSubmitter")
-  paymentsVerified  Payment[]  @relation("PaymentVerifier")
+  sessions              Session[]
+  auditLogs             AuditLog[]
+  paymentsSubmitted     Payment[]               @relation("PaymentSubmitter")
+  paymentsVerified      Payment[]               @relation("PaymentVerifier")
+  Notification          Notification[]
+  NotificationRecipient NotificationRecipient[]
+  Meeting               Meeting[]
 
   @@index([masjidId])
 }
@@ -238,6 +244,7 @@ model SubscriptionInvoice {
   updatedAt   DateTime         @updatedAt
 
   allocations PaymentAllocation[]
+  reminders   ReminderLog[]
 
   @@unique([planId, familyId, periodMonth])
   @@index([masjidId, status, dueDate])
@@ -296,4 +303,134 @@ model PaymentAllocation {
 
   @@unique([paymentId, invoiceId])
   @@index([invoiceId])
+}
+
+// ───────────── Phase 3: notifications, announcements & meetings ─────────────
+
+enum NotificationCategory {
+  SUBSCRIPTION
+  PAYMENT
+  MEETING
+  EMERGENCY
+  ACTIVITY
+  APPLICATION
+  NOTICE
+  EVENT
+}
+
+enum Priority {
+  NORMAL
+  IMPORTANT
+  URGENT
+}
+
+enum Audience {
+  ALL
+  FAMILIES
+  MEMBERS
+  PENDING_SUBSCRIPTION
+  BOARD
+  WARDS
+  DIRECT // system message to specific accounts (payment confirmations etc.)
+}
+
+model Notification {
+  id            String               @id @default(cuid())
+  masjidId      String
+  masjid        Masjid               @relation(fields: [masjidId], references: [id])
+  title         String
+  body          String
+  category      NotificationCategory
+  priority      Priority             @default(NORMAL)
+  audience      Audience
+  audienceLabel String? // human summary, e.g. "Ward 1, Ward 2"
+  attachmentUrl String?
+  publishAt     DateTime             @default(now())
+  expiresAt     DateTime?
+  automated     Boolean              @default(false)
+  createdById   String?
+  createdBy     User?                @relation(fields: [createdById], references: [id])
+  meetingId     String?
+  meeting       Meeting?             @relation(fields: [meetingId], references: [id], onDelete: SetNull)
+  createdAt     DateTime             @default(now())
+
+  recipients NotificationRecipient[]
+
+  @@index([masjidId, publishAt])
+}
+
+/// Audience is resolved to accounts when the notification is created, so history shows exactly who received it.
+model NotificationRecipient {
+  id             String       @id @default(cuid())
+  notificationId String
+  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  readAt         DateTime?
+
+  @@unique([notificationId, userId])
+  @@index([userId, readAt])
+}
+
+enum ReminderKind {
+  UPCOMING
+  DUE_TODAY
+  OVERDUE
+}
+
+/// Makes automated subscription reminders idempotent: one per installment per kind.
+model ReminderLog {
+  id        String              @id @default(cuid())
+  invoiceId String
+  invoice   SubscriptionInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  kind      ReminderKind
+  sentAt    DateTime            @default(now())
+
+  @@unique([invoiceId, kind])
+}
+
+enum MeetingStatus {
+  DRAFT
+  PUBLISHED
+  COMPLETED
+  CANCELLED
+}
+
+model Meeting {
+  id                 String        @id @default(cuid())
+  masjidId           String
+  masjid             Masjid        @relation(fields: [masjidId], references: [id])
+  meetingCode        String // MTG-0001
+  title              String
+  description        String?
+  category           String // General Body, Committee, Special, ...
+  startsAt           DateTime
+  location           String
+  attendance         String        @default("Open to all residents")
+  attachmentUrl      String?
+  status             MeetingStatus @default(DRAFT)
+  minutes            String?
+  minutesPublishedAt DateTime?
+  createdById        String?
+  createdBy          User?         @relation(fields: [createdById], references: [id])
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  agenda        AgendaItem[]
+  notifications Notification[]
+
+  @@unique([masjidId, meetingCode])
+  @@index([masjidId, startsAt])
+}
+
+model AgendaItem {
+  id         String  @id @default(cuid())
+  meetingId  String
+  meeting    Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  position   Int
+  title      String
+  details    String?
+  resolution String? // decision recorded after the meeting; public once minutes are published
+
+  @@index([meetingId, position])
 }

@@ -25,7 +25,17 @@ Demo logins (password `mahall123`, local only):
 
 **Phase 2 (done):** yearly subscription plans billed per family in monthly installments, due day, grace period and late fee, exemptions, waivers and adjustments. Residents pay by UPI using a QR code or a UPI app link, then submit the UTR. Admins verify or reject submissions and record cash or bank payments. Payments go to the oldest installments first, and receipts can be printed. There are collection and pending reports with CSV export. No payment gateway is used.
 
-**Next:** Phase 3, notifications and meetings. Phase 4, applications and form builder. Phase 5, income and expenses.
+**Phase 3 (done):** in-app notifications sent to all residents, specific families, selected members, residents with pending subscription, board members or wards. They support priority, scheduled publishing, expiry, an attachment link, read counts and withdrawal, and residents see an unread badge. Automated subscription reminders (upcoming, due today, overdue) never send duplicates, even when two runs overlap, and payment events notify the family. Meetings have agendas, draft, publish and cancel with notifications, minutes and resolutions that stay private until published.
+
+**Next:** Phase 4, applications and form builder. Phase 5, income and expenses.
+
+## Scheduled reminders
+
+Reminders run whenever an admin opens the dashboard. In production, also call this once a day from a scheduler:
+
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" https://<your-host>/api/cron/reminders
+```
 
 ## Notes
 

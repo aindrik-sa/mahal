@@ -6,6 +6,7 @@ import { audit } from "@/lib/audit";
 import { str, dateOrNull } from "@/lib/format";
 import { rupees } from "@/lib/billing";
 import { createPayment } from "@/lib/payments";
+import { notifyFamily } from "@/lib/notify";
 import type { ActionResult } from "@/components/action-form";
 
 /** Resident submits a UPI payment they made, for admin verification. Only for their own family. */
@@ -33,6 +34,7 @@ export async function submitUpiPayment(_: ActionResult, fd: FormData): Promise<A
     notes: str(fd, "notes"), submittedById: user.id, invoiceIds,
   });
   if ("error" in r) return { error: r.error };
+  await notifyFamily(user.masjidId, member.familyId, { title: "Payment verification pending", body: `Your UPI payment of ${rupees(amount)} (ref ${reference}) was submitted and is awaiting verification by the Mahall office.`, category: "PAYMENT" });
   await audit(user, "payment.submit", "Payment", r.payment.id, `${user.name} submitted UPI payment ${rupees(amount)} (ref ${reference}) for ${member.family.familyName}`);
   revalidatePath("/subscriptions");
   return { ok: `Submitted ${rupees(amount)}. The Mahall office will verify it and your receipt will appear here.` };

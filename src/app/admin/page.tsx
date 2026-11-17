@@ -3,14 +3,17 @@ import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { rupees, METHOD_LABEL } from "@/lib/billing";
 import { planCollection } from "@/lib/collection";
-import { fmtDate } from "@/lib/format";
+import { fmtDate, fmtDateTime } from "@/lib/format";
+import { runSubscriptionReminders } from "@/lib/notify";
 import { PageHeader, Stat, ComingSoon } from "@/components/ui";
 import { PaymentBadge } from "@/components/billing";
 
 export default async function AdminDashboard() {
   const user = await requireAdmin();
   const m = user.masjidId;
-  const [families, members, board, portalUsers, recent, plan, awaitingCount, recentPayments] = await Promise.all([
+  // Automated reminders piggyback on dashboard visits (the cron endpoint covers days nobody logs in).
+  await runSubscriptionReminders(m).catch((e) => console.error("reminders failed", e));
+  const [families, members, board, portalUsers, recent, plan, awaitingCount, recentPayments, meetings] = await Promise.all([
     db.family.count({ where: { masjidId: m, status: "ACTIVE" } }),
     db.member.count({ where: { masjidId: m, status: "ACTIVE" } }),
     db.boardMember.count({ where: { masjidId: m, status: "ACTIVE" } }),
@@ -19,6 +22,7 @@ export default async function AdminDashboard() {
     db.subscriptionPlan.findFirst({ where: { masjidId: m, isActive: true }, orderBy: { startMonth: "desc" } }),
     db.payment.count({ where: { masjidId: m, status: "PENDING_VERIFICATION" } }),
     db.payment.findMany({ where: { masjidId: m }, orderBy: { createdAt: "desc" }, take: 6, include: { family: { select: { familyName: true } } } }),
+    db.meeting.findMany({ where: { masjidId: m, status: { in: ["DRAFT", "PUBLISHED"] }, startsAt: { gte: new Date() } }, orderBy: { startsAt: "asc" }, take: 3 }),
   ]);
   const col = plan ? (await planCollection(m, plan.id)).totals : null;
 
@@ -81,7 +85,21 @@ export default async function AdminDashboard() {
           </section>
         </div>
         <div className="space-y-3">
-          <ComingSoon title="Upcoming meetings" phase={3} />
+          <section className="card">
+            <div className="flex justify-between items-center mb-2">
+              <h2 className="font-semibold">Upcoming meetings</h2>
+              <Link href="/admin/meetings" className="text-sm text-emerald-800 hover:underline">Manage</Link>
+            </div>
+            {meetings.length === 0 ? <p className="text-sm text-stone-500">None scheduled.</p> : (
+              <ul className="text-sm space-y-2">
+                {meetings.map((x) => (
+                  <li key={x.id}><Link href={`/admin/meetings/${x.id}`} className="font-medium hover:underline">{x.title}</Link>
+                    {x.status === "DRAFT" && <span className="badge bg-stone-200 text-stone-700 ml-1">Draft</span>}
+                    <div className="text-xs text-stone-500">{fmtDateTime(x.startsAt)} · {x.location}</div></li>
+                ))}
+              </ul>
+            )}
+          </section>
           <ComingSoon title="Pending certificate applications" phase={4} />
           <ComingSoon title="Monthly income, expenses & balance" phase={5} />
         </div>

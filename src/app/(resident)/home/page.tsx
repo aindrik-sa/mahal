@@ -3,7 +3,9 @@ import { db } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { PageHeader, Stat, ComingSoon } from "@/components/ui";
 import { familyLedger, applyLateFees, rupees } from "@/lib/billing";
-import { fmtDate } from "@/lib/format";
+import { fmtDate, fmtDateTime } from "@/lib/format";
+import { visibleWhere } from "@/lib/notify";
+import { PriorityBadge } from "@/components/notifications";
 
 export default async function ResidentHome() {
   const user = await requireUser();
@@ -17,6 +19,10 @@ export default async function ResidentHome() {
   if (familyId) await applyLateFees(m);
   const ledger = familyId ? await familyLedger(m, familyId) : null;
   const s = ledger?.rows.length ? ledger.summary : null;
+  const [latest, nextMeeting] = await Promise.all([
+    db.notificationRecipient.findMany({ where: visibleWhere(user.id), orderBy: { notification: { publishAt: "desc" } }, take: 4, include: { notification: true } }),
+    db.meeting.findFirst({ where: { masjidId: m, status: "PUBLISHED", startsAt: { gte: new Date() } }, orderBy: { startsAt: "asc" }, include: { agenda: { orderBy: { position: "asc" }, take: 3 } } }),
+  ]);
   return (
     <>
       <PageHeader title={`Assalamu alaikum, ${user.name.split(" ")[0]}`} subtitle="Your Mahall at a glance" />
@@ -50,7 +56,30 @@ export default async function ResidentHome() {
           </ul>
         </section>
         <div className="grid gap-3">
-          <ComingSoon title="Notifications, announcements & upcoming meetings" phase={3} />
+          {nextMeeting && (
+            <Link href={`/meetings/${nextMeeting.id}`} className="card block hover:border-emerald-400">
+              <div className="text-xs font-medium uppercase tracking-wide text-emerald-800">Upcoming · {nextMeeting.category}</div>
+              <div className="font-semibold">{nextMeeting.title}</div>
+              <div className="text-sm text-stone-600">{fmtDateTime(nextMeeting.startsAt)} · {nextMeeting.location}</div>
+              <ol className="list-decimal list-inside text-sm text-stone-600 mt-1">{nextMeeting.agenda.map((a) => <li key={a.id}>{a.title}</li>)}</ol>
+            </Link>
+          )}
+          <section className="card">
+            <div className="flex justify-between items-center mb-2">
+              <h2 className="font-semibold">Latest notifications</h2>
+              <Link href="/notifications" className="text-sm text-emerald-800 hover:underline">View all</Link>
+            </div>
+            {latest.length === 0 ? <p className="text-sm text-stone-500">No notifications yet.</p> : (
+              <ul className="text-sm divide-y divide-stone-100">
+                {latest.map(({ id, readAt, notification: n }) => (
+                  <li key={id} className="py-2">
+                    <div className="flex items-center gap-2">{!readAt && <span className="w-2 h-2 rounded-full bg-emerald-600" />}<span className="font-medium">{n.title}</span><PriorityBadge p={n.priority} /></div>
+                    <div className="text-xs text-stone-500">{fmtDateTime(n.publishAt)}</div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
           <ComingSoon title="Certificate applications" phase={4} />
           <ComingSoon title="Income & expense summary" phase={5} />
         </div>

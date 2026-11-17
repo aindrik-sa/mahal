@@ -101,6 +101,33 @@ async function main() {
   await pay(3, 2, "CASH", true, null);
   await pay(3, 1, "UPI_MANUAL", false, "412398765432");
 
+  // Meetings and an announcement (Phase 3).
+  const residents = (await prisma.user.findMany({ where: { masjidId: masjid.id, role: "RESIDENT" }, select: { id: true } })).map((u) => u.id);
+  const day = 864e5;
+  const upcoming = await prisma.meeting.create({
+    data: { masjidId: masjid.id, meetingCode: "MTG-0001", title: "Annual General Body Meeting", category: "General Body Meeting", createdById: admin.id,
+      startsAt: new Date(Date.now() + 10 * day), location: "Masjid hall", attendance: "Family heads required", status: "PUBLISHED",
+      description: "All family heads are requested to attend after Isha prayer.",
+      agenda: { create: [{ position: 1, title: "Presentation of annual accounts" }, { position: 2, title: "Madrasa renovation proposal", details: "Estimate of ₹4.5 lakh from the building committee." }, { position: 3, title: "Ramadan programme planning" }] } },
+  });
+  await prisma.meeting.create({
+    data: { masjidId: masjid.id, meetingCode: "MTG-0002", title: "Committee Meeting – September", category: "Committee Meeting", createdById: admin.id,
+      startsAt: new Date(Date.now() - 50 * day), location: "Masjid office", status: "COMPLETED", minutesPublishedAt: new Date(Date.now() - 45 * day),
+      minutes: "Present: 9 of 11 committee members.\nThe treasurer presented the August accounts. Members discussed the water tank repair.",
+      agenda: { create: [{ position: 1, title: "Water tank repair", resolution: "Approved up to ₹35,000; work to finish before Rabi al-Awwal." }, { position: 2, title: "Subscription collection drive", resolution: "Ward volunteers to visit families with 3+ months pending." }] } },
+  });
+  await prisma.masjid.update({ where: { id: masjid.id }, data: { meetingSeq: 2 } });
+  await prisma.notification.create({
+    data: { masjidId: masjid.id, title: "General Body Meeting: Annual General Body Meeting", body: "All family heads are requested to attend. Agenda: annual accounts, madrasa renovation, Ramadan planning.",
+      category: "MEETING", priority: "IMPORTANT", audience: "ALL", audienceLabel: "All residents", createdById: admin.id, meetingId: upcoming.id,
+      recipients: { create: residents.map((userId) => ({ userId })) } },
+  });
+  await prisma.notification.create({
+    data: { masjidId: masjid.id, title: "Water supply interruption", body: "Ablution area water will be off on Friday from 9 am to 11 am for tank cleaning.",
+      category: "NOTICE", audience: "ALL", audienceLabel: "All residents", createdById: admin.id, publishAt: new Date(Date.now() - 2 * day),
+      recipients: { create: residents.map((userId) => ({ userId })) } },
+  });
+
   console.log(`Seeded. Logins (password: ${DEMO_PASSWORD}): admin@mahall.test, resident@mahall.test`);
 }
 

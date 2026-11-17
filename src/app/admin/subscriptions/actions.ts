@@ -6,7 +6,8 @@ import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { str } from "@/lib/format";
-import { generateInvoices } from "@/lib/billing";
+import { generateInvoices, rupees } from "@/lib/billing";
+import { notify, resolveAudience } from "@/lib/notify";
 import type { ActionResult } from "@/components/action-form";
 
 const planSchema = z.object({
@@ -72,7 +73,12 @@ export async function runGeneration(_: ActionResult, fd: FormData): Promise<Acti
   const plan = await db.subscriptionPlan.findFirst({ where: { id: String(fd.get("id")), masjidId: user.masjidId } });
   if (!plan) return { error: "Plan not found" };
   if (!plan.isActive) return { error: "Plan is inactive." };
+  const first = (await db.subscriptionInvoice.count({ where: { planId: plan.id } })) === 0;
   const n = await generateInvoices(plan);
+  if (first && n > 0) {
+    const { userIds } = await resolveAudience(user.masjidId, "ALL");
+    await notify({ masjidId: user.masjidId, title: `Subscription period started: ${plan.name}`, body: `The annual masjid subscription is ${rupees(plan.annualAmount)}, payable as ${rupees(plan.monthlyAmount)} a month, due on day ${plan.dueDay} of each month. View your installments on the Subscriptions page.`, category: "SUBSCRIPTION", audience: "ALL", audienceLabel: "All residents", userIds, createdById: user.id, automated: true });
+  }
   await audit(user, "subscription.generate", "SubscriptionPlan", plan.id, `Generated ${n} monthly installments for ${plan.name}`);
   revalidatePath(`/admin/subscriptions/${plan.id}`);
   return { ok: n ? `Created ${n} installments.` : "Everything is already up to date; no new installments needed." };
