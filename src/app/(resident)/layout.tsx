@@ -9,8 +9,8 @@ const items = [
   { href: "/board", label: "Board Members" },
   { href: "/subscriptions", label: "Subscriptions" },
   { href: "/notifications", label: "Notifications" },
-  { href: "/applications", label: "Applications", soon: true },
-  { href: "/finance", label: "Finance", soon: true },
+  { href: "/applications", label: "Applications" },
+  { href: "/finance", label: "Finance" },
   { href: "/meetings", label: "Agendas & Meetings" },
   { href: "/profile", label: "My Profile" },
 ];

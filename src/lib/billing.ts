@@ -1,5 +1,6 @@
 import type { Prisma, SubscriptionInvoice, SubscriptionPlan } from "@prisma/client";
 import { db } from "./db";
+import { recordSubscriptionIncome } from "./finance";
 
 export type DisplayStatus = "PAID" | "PENDING" | "PARTIAL" | "OVERDUE" | "WAIVED" | "AWAITING";
 
@@ -12,7 +13,7 @@ export const STATUS_STYLE: Record<DisplayStatus, string> = {
 };
 export const METHOD_LABEL = { UPI_MANUAL: "UPI", CASH: "Cash", BANK_TRANSFER: "Bank transfer" } as const;
 
-export const rupees = (n: number) => `₹${n.toLocaleString("en-IN")}`;
+export const rupees = (n: number) => `${n < 0 ? "−" : ""}₹${Math.abs(n).toLocaleString("en-IN")}`;
 
 /** Amount still owed on an installment. */
 export const outstanding = (i: Pick<SubscriptionInvoice, "amount" | "lateFee" | "paidAmount" | "status">) =>
@@ -111,10 +112,13 @@ export async function settlePayment(tx: Prisma.TransactionClient, paymentId: str
     });
   }
   const m = await tx.masjid.update({ where: { id: p.masjidId }, data: { receiptSeq: { increment: 1 } } });
-  return tx.payment.update({
+  const done = await tx.payment.update({
     where: { id: p.id },
     data: { status: "VERIFIED", verifiedById: verifierId, verifiedAt: new Date(), receiptNo: `RCP-${String(m.receiptSeq).padStart(5, "0")}` },
   });
+  // Every verified subscription payment shows up in the masjid's income ledger.
+  await recordSubscriptionIncome(tx, done, verifierId);
+  return done;
 }
 
 /** Everything a family's subscription page needs. */

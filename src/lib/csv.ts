@@ -29,7 +29,8 @@ export function toCsv(rows: (string | number | null | undefined)[][]) {
   // Prefix cells starting with = + - @ to avoid spreadsheet formula injection.
   const esc = (v: unknown) => {
     let s = v == null ? "" : String(v);
-    if (/^[=+\-@]/.test(s)) s = "'" + s;
+    // Only text can be a formula; numbers (e.g. negative amounts) must stay numeric.
+    if (typeof v === "string" && /^[=+\-@]/.test(s)) s = "'" + s;
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   return "﻿" + rows.map((r) => r.map(esc).join(",")).join("\r\n");

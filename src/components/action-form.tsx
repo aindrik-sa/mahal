@@ -14,7 +14,9 @@ export function ActionForm({ action, children, className, resetOnOk, submit, pen
   // which would wipe the user's input when the server returns a validation error.
   const onSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const fd = new FormData(e.currentTarget);
+    // Include the clicked submit button's name/value (e.g. intent=draft vs intent=submit).
+    const submitter = (e.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
+    const fd = new FormData(e.currentTarget, submitter?.form === e.currentTarget ? submitter : undefined);
     startTransition(() => formAction(fd));
   };
   return (

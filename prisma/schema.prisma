@@ -39,10 +39,20 @@ model Masjid {
   createdAt DateTime @default(now())
 
   // Counters for human-readable IDs (FAM-0001, MEM-0001)
-  familySeq  Int @default(0)
-  memberSeq  Int @default(0)
-  receiptSeq Int @default(0)
-  meetingSeq Int @default(0)
+  familySeq      Int @default(0)
+  memberSeq      Int @default(0)
+  receiptSeq     Int @default(0)
+  meetingSeq     Int @default(0)
+  applicationSeq Int @default(0)
+  certificateSeq Int @default(0)
+  incomeSeq      Int @default(0)
+  expenseSeq     Int @default(0)
+
+  // Finance: balance = opening balance + income − expenses (from openingBalanceDate on).
+  openingBalance          Int       @default(0)
+  openingBalanceDate      DateTime?
+  /// Residents see finance figures only up to this date (the admin publishes month by month).
+  financePublishedThrough DateTime?
 
   users         User[]
   families      Family[]
@@ -54,6 +64,11 @@ model Masjid {
   payments      Payment[]
   notifications Notification[]
   meetings      Meeting[]
+  forms         Form[]
+  applications  Application[]
+  files         StoredFile[]
+  incomes       Income[]
+  expenses      Expense[]
 }
 
 model User {
@@ -78,11 +93,16 @@ model User {
 
   sessions              Session[]
   auditLogs             AuditLog[]
-  paymentsSubmitted     Payment[]               @relation("PaymentSubmitter")
-  paymentsVerified      Payment[]               @relation("PaymentVerifier")
+  paymentsSubmitted     Payment[]                  @relation("PaymentSubmitter")
+  paymentsVerified      Payment[]                  @relation("PaymentVerifier")
   Notification          Notification[]
   NotificationRecipient NotificationRecipient[]
   Meeting               Meeting[]
+  applications          Application[]
+  filesUploaded         StoredFile[]
+  statusChanges         ApplicationStatusHistory[]
+  incomesRecorded       Income[]
+  expensesRecorded      Expense[]
 
   @@index([masjidId])
 }
@@ -285,6 +305,7 @@ model Payment {
   createdAt     DateTime      @default(now())
 
   allocations PaymentAllocation[]
+  income      Income?
 
   @@unique([masjidId, reference])
   @@unique([masjidId, receiptNo])
@@ -433,4 +454,228 @@ model AgendaItem {
   resolution String? // decision recorded after the meeting; public once minutes are published
 
   @@index([meetingId, position])
+}
+
+// ───────────── Phase 4: certificate applications & form builder ─────────────
+
+enum FormCategory {
+  MARRIAGE_CERTIFICATE
+  MARRIAGE_REGISTRATION
+  MEMBERSHIP_CERTIFICATE
+  RESIDENCE_CERTIFICATE
+  OTHER
+}
+
+enum FieldType {
+  TEXT
+  TEXTAREA
+  NUMBER
+  DATE
+  SELECT
+  RADIO
+  CHECKBOX
+  FILE
+  DECLARATION
+}
+
+model Form {
+  id                  String       @id @default(cuid())
+  masjidId            String
+  masjid              Masjid       @relation(fields: [masjidId], references: [id])
+  name                String
+  category            FormCategory
+  description         String?
+  isActive            Boolean      @default(false)
+  /// Generated certificate text. {{Field label}} placeholders are filled from answers;
+  /// also {{applicant}}, {{family}}, {{certificate_no}}, {{date}}, {{masjid}}.
+  certificateTemplate String?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  fields       FormField[]
+  applications Application[]
+
+  @@index([masjidId, isActive])
+}
+
+model FormField {
+  id       String    @id @default(cuid())
+  formId   String
+  form     Form      @relation(fields: [formId], references: [id], onDelete: Cascade)
+  position Int
+  label    String
+  type     FieldType
+  required Boolean   @default(false)
+  options  String[]
+  helpText String?
+
+  @@index([formId, position])
+}
+
+enum ApplicationStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  INFO_REQUIRED
+  APPROVED
+  REJECTED
+  CERTIFICATE_READY
+  COMPLETED
+}
+
+model Application {
+  id              String            @id @default(cuid())
+  masjidId        String
+  masjid          Masjid            @relation(fields: [masjidId], references: [id])
+  appCode         String? // APP-2026-0001, assigned on first submission
+  formId          String
+  form            Form              @relation(fields: [formId], references: [id])
+  applicantId     String
+  applicant       User              @relation(fields: [applicantId], references: [id])
+  familyId        String?
+  /// Field definitions at (last) submission, so later form edits don't change history.
+  fieldsSnapshot  Json?
+  /// { [fieldId]: string | string[] | boolean }
+  answers         Json              @default("{}")
+  status          ApplicationStatus @default(DRAFT)
+  submittedAt     DateTime?
+  certificateNo   String?
+  certificateText String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  files   StoredFile[]
+  history ApplicationStatusHistory[]
+
+  @@unique([masjidId, appCode])
+  @@unique([masjidId, certificateNo])
+  @@index([masjidId, status])
+  @@index([applicantId])
+}
+
+model ApplicationStatusHistory {
+  id            String             @id @default(cuid())
+  applicationId String
+  application   Application        @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  from          ApplicationStatus?
+  to            ApplicationStatus
+  note          String? // shown to the applicant
+  byUserId      String?
+  byUser        User?              @relation(fields: [byUserId], references: [id])
+  createdAt     DateTime           @default(now())
+
+  @@index([applicationId, createdAt])
+}
+
+enum FileKind {
+  SUPPORTING
+  CERTIFICATE
+  RECEIPT // finance receipts / supporting documents (admin-only)
+}
+
+/// Private uploaded file. Bytes live outside the web root (local disk in dev; S3-compatible later).
+model StoredFile {
+  id            String       @id @default(cuid())
+  masjidId      String
+  masjid        Masjid       @relation(fields: [masjidId], references: [id])
+  applicationId String?
+  application   Application? @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  fieldId       String?
+  kind          FileKind     @default(SUPPORTING)
+  originalName  String
+  mimeType      String
+  size          Int
+  sha256        String
+  storageKey    String       @unique
+  uploadedById  String?
+  uploadedBy    User?        @relation(fields: [uploadedById], references: [id])
+  createdAt     DateTime     @default(now())
+
+  incomeOf  Income[]
+  expenseOf Expense[]
+
+  @@index([applicationId])
+}
+
+// ───────────── Phase 5: income & expense management ─────────────
+
+enum IncomeCategory {
+  SUBSCRIPTION
+  DONATION
+  ZAKAT
+  EVENT_COLLECTION
+  OTHER
+}
+
+enum ExpenseCategory {
+  ELECTRICITY
+  WATER
+  MAINTENANCE
+  STAFF_SALARY
+  RELIGIOUS_ACTIVITIES
+  COMMUNITY_EVENTS
+  CONSTRUCTION
+  OTHER
+}
+
+enum FinanceMethod {
+  CASH
+  UPI
+  BANK_TRANSFER
+  CHEQUE
+  OTHER
+}
+
+/// Income record. Subscription payments create one automatically when verified (paymentId set).
+/// Records are never deleted: corrections void the record with a reason (audit trail).
+model Income {
+  id           String         @id @default(cuid())
+  masjidId     String
+  masjid       Masjid         @relation(fields: [masjidId], references: [id])
+  txnCode      String // INC-00001
+  category     IncomeCategory
+  description  String
+  amount       Int
+  date         DateTime
+  method       FinanceMethod
+  reference    String?
+  /// Private: never shown to residents.
+  donorName    String?
+  paymentId    String?        @unique
+  payment      Payment?       @relation(fields: [paymentId], references: [id])
+  attachmentId String?
+  attachment   StoredFile?    @relation(fields: [attachmentId], references: [id])
+  recordedById String?
+  recordedBy   User?          @relation(fields: [recordedById], references: [id])
+  voidedAt     DateTime?
+  voidReason   String?
+  createdAt    DateTime       @default(now())
+
+  @@unique([masjidId, txnCode])
+  @@index([masjidId, date])
+}
+
+model Expense {
+  id           String          @id @default(cuid())
+  masjidId     String
+  masjid       Masjid          @relation(fields: [masjidId], references: [id])
+  txnCode      String // EXP-00001
+  category     ExpenseCategory
+  description  String
+  amount       Int
+  date         DateTime
+  method       FinanceMethod
+  reference    String?
+  recipient    String? // vendor / payee
+  approvedBy   String?
+  receiptId    String?
+  receipt      StoredFile?     @relation(fields: [receiptId], references: [id])
+  recordedById String?
+  recordedBy   User?           @relation(fields: [recordedById], references: [id])
+  voidedAt     DateTime?
+  voidReason   String?
+  createdAt    DateTime        @default(now())
+
+  @@unique([masjidId, txnCode])
+  @@index([masjidId, date])
 }

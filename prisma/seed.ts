@@ -128,6 +128,78 @@ async function main() {
       recipients: { create: residents.map((userId) => ({ userId })) } },
   });
 
+  // Application forms (Phase 4). Field wording must follow the masjid's actual verification process.
+  type F = { label: string; type: "TEXT" | "TEXTAREA" | "NUMBER" | "DATE" | "SELECT" | "RADIO" | "CHECKBOX" | "FILE" | "DECLARATION"; required?: boolean; options?: string[]; helpText?: string };
+  const mkForm = (name: string, category: "MARRIAGE_CERTIFICATE" | "MEMBERSHIP_CERTIFICATE", description: string, certificateTemplate: string, fields: F[]) =>
+    prisma.form.create({
+      data: {
+        masjidId: masjid.id, name, category, description, certificateTemplate, isActive: true,
+        fields: { create: fields.map((x, i) => ({ position: i + 1, label: x.label, type: x.type, required: x.required ?? false, options: x.options ?? [], helpText: x.helpText })) },
+      },
+    });
+  await mkForm(
+    "Marriage Certificate", "MARRIAGE_CERTIFICATE",
+    "Apply for a certificate of a nikah solemnised under this Mahall. Keep scanned copies of the documents ready.",
+    "This is to certify that the Nikah of {{Groom's name}}, son of {{Groom's father's name}}, and {{Bride's name}}, daughter of {{Bride's father's name}}, was solemnised on {{Marriage date}} at {{Marriage location}}, in the presence of witnesses, according to Islamic Shariah, and is recorded in the marriage register of {{masjid}}.\n\nCertificate No. {{certificate_no}}, issued on {{date}}.",
+    [
+      { label: "Groom's name", type: "TEXT", required: true },
+      { label: "Groom's father's name", type: "TEXT", required: true },
+      { label: "Bride's name", type: "TEXT", required: true },
+      { label: "Bride's father's name", type: "TEXT", required: true },
+      { label: "Marriage date", type: "DATE", required: true },
+      { label: "Marriage location", type: "TEXT", required: true },
+      { label: "Bride's family details", type: "TEXTAREA", helpText: "House name, Mahall, contact" },
+      { label: "Groom's family details", type: "TEXTAREA", helpText: "House name, Mahall, contact" },
+      { label: "Guardian (wali) name and relationship", type: "TEXT", required: true },
+      { label: "Contact number", type: "TEXT", required: true },
+      { label: "Purpose of certificate", type: "SELECT", options: ["Passport / visa", "Government records", "Personal", "Other"] },
+      { label: "Nikah register copy or photos", type: "FILE", required: true },
+      { label: "ID proof of bride and groom", type: "FILE", required: true, helpText: "Aadhaar or passport" },
+      { label: "Additional information", type: "TEXTAREA" },
+      { label: "Declaration", type: "DECLARATION", required: true, helpText: "I declare that the information given is true and the documents attached are genuine." },
+    ],
+  );
+  await mkForm(
+    "Mahall Membership Certificate", "MEMBERSHIP_CERTIFICATE",
+    "Certifies that the applicant's family is a registered member of this Mahall.",
+    "This is to certify that {{applicant}} of {{family}} is a registered member of {{masjid}}. This certificate is issued on request for the purpose of {{Purpose}}.\n\nCertificate No. {{certificate_no}}, issued on {{date}}.",
+    [
+      { label: "Purpose", type: "RADIO", required: true, options: ["Marriage", "Employment", "Education", "Other"] },
+      { label: "Details", type: "TEXTAREA" },
+      { label: "Declaration", type: "DECLARATION", required: true, helpText: "I declare that the information given is true." },
+    ],
+  );
+
+  // Finance (Phase 5): opening balance at FY start, monthly income and expenses, published through last month.
+  const ist = (y: number, m: number, d: number) => new Date(`${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}T00:00:00+05:30`);
+  await prisma.masjid.update({ where: { id: masjid.id }, data: { openingBalance: 185000, openingBalanceDate: ist(fy, 3, 1) } });
+  let incSeq = (await prisma.masjid.findUniqueOrThrow({ where: { id: masjid.id } })).incomeSeq;
+  let expSeq = 0;
+  const monthsSoFar: { y: number; m: number }[] = [];
+  for (let k = 0; k < 12; k++) {
+    const y = k < 9 ? fy : fy + 1, m = (k + 3) % 12;
+    if (ist(y, m, 1) > now) break;
+    monthsSoFar.push({ y, m });
+  }
+  for (const [k, { y, m }] of monthsSoFar.entries()) {
+    const day = (d: number) => { const t = ist(y, m, d); return t > now ? now : t; };
+    const inc = [
+      { category: "DONATION" as const, description: "Friday collection", amount: 18000 + k * 750, method: "CASH" as const, d: 8 },
+      { category: "DONATION" as const, description: "Donation for madrasa", amount: 5000 + (k % 3) * 2500, method: "UPI" as const, d: 15, donorName: "Well-wisher (anonymous)" },
+      ...(m === 8 ? [{ category: "EVENT_COLLECTION" as const, description: "Nabidinam programme collection", amount: 42000, method: "CASH" as const, d: 20 }] : []),
+    ];
+    const exp = [
+      { category: "ELECTRICITY" as const, description: "KSEB electricity bill", amount: 6200 + k * 180, method: "UPI" as const, d: 5, recipient: "KSEB" },
+      { category: "WATER" as const, description: "Water authority bill", amount: 900, method: "UPI" as const, d: 6, recipient: "Kerala Water Authority" },
+      { category: "STAFF_SALARY" as const, description: "Imam and muezzin salary", amount: 28000, method: "BANK_TRANSFER" as const, d: 1, recipient: "Masjid staff", approvedBy: "Treasurer" },
+      ...(k === 2 ? [{ category: "MAINTENANCE" as const, description: "Water tank repair", amount: 32500, method: "CHEQUE" as const, d: 18, recipient: "Al-Ameen Plumbing", approvedBy: "Committee resolution" }] : []),
+      ...(m === 8 ? [{ category: "RELIGIOUS_ACTIVITIES" as const, description: "Nabidinam programme expenses", amount: 27500, method: "CASH" as const, d: 21, approvedBy: "Secretary" }] : []),
+    ];
+    for (const x of inc) await prisma.income.create({ data: { masjidId: masjid.id, txnCode: `INC-${String(++incSeq).padStart(5, "0")}`, category: x.category, description: x.description, amount: x.amount, date: day(x.d), method: x.method, donorName: "donorName" in x ? x.donorName : null, recordedById: admin.id } });
+    for (const x of exp) await prisma.expense.create({ data: { masjidId: masjid.id, txnCode: `EXP-${String(++expSeq).padStart(5, "0")}`, category: x.category, description: x.description, amount: x.amount, date: day(x.d), method: x.method, recipient: "recipient" in x ? x.recipient : null, approvedBy: "approvedBy" in x ? x.approvedBy : null, recordedById: admin.id } });
+  }
+  await prisma.masjid.update({ where: { id: masjid.id }, data: { incomeSeq: incSeq, expenseSeq: expSeq, financePublishedThrough: ist(now.getFullYear(), now.getMonth(), 1) } });
+
   console.log(`Seeded. Logins (password: ${DEMO_PASSWORD}): admin@mahall.test, resident@mahall.test`);
 }
 

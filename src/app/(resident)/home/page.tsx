@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
-import { PageHeader, Stat, ComingSoon } from "@/components/ui";
+import { PageHeader, Stat } from "@/components/ui";
 import { familyLedger, applyLateFees, rupees } from "@/lib/billing";
 import { fmtDate, fmtDateTime } from "@/lib/format";
 import { visibleWhere } from "@/lib/notify";
@@ -80,8 +80,14 @@ export default async function ResidentHome() {
               </ul>
             )}
           </section>
-          <ComingSoon title="Certificate applications" phase={4} />
-          <ComingSoon title="Income & expense summary" phase={5} />
+          <Link href="/applications" className="card block hover:border-emerald-400">
+            <h2 className="font-semibold">Certificates</h2>
+            <p className="text-sm text-stone-600">Apply for a marriage, membership or other masjid certificate and track its status.</p>
+          </Link>
+          <Link href="/finance" className="card block hover:border-emerald-400">
+            <h2 className="font-semibold">Mahall finances</h2>
+            <p className="text-sm text-stone-600">See the masjid&apos;s published income, expenses and balance.</p>
+          </Link>
         </div>
       </div>
     </>
