@@ -24,10 +24,10 @@ function sniff(buf: Buffer): { mime: string; ext: string } | null {
 const safeName = (n: string) => n.replace(/[^\w.\- ()]+/g, "_").slice(0, 120) || "file";
 
 // Production (Vercel): set BLOB_READ_WRITE_TOKEN to use private Vercel Blob. Otherwise local disk.
-const useBlob = () => !!process.env.BLOB_READ_WRITE_TOKEN;
+const blobEnabled = () => !!process.env.BLOB_READ_WRITE_TOKEN;
 
 async function put(key: string, buf: Buffer) {
-  if (useBlob()) {
+  if (blobEnabled()) {
     await blobPut(key, buf, { access: "private", addRandomSuffix: false, allowOverwrite: false });
     return;
   }
@@ -38,7 +38,7 @@ async function put(key: string, buf: Buffer) {
 }
 
 async function get(key: string): Promise<Buffer> {
-  if (useBlob()) {
+  if (blobEnabled()) {
     const r = await blobGet(key, { access: "private" });
     if (!r || r.statusCode !== 200 || !r.stream) throw new Error("file not found");
     return Buffer.from(await new Response(r.stream).arrayBuffer());
@@ -49,7 +49,7 @@ async function get(key: string): Promise<Buffer> {
 }
 
 export async function removeStored(key: string) {
-  if (useBlob()) {
+  if (blobEnabled()) {
     await blobDel(key).catch(() => {});
     return;
   }
