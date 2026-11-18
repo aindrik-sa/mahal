@@ -3,6 +3,7 @@ import { createHash, randomBytes } from "crypto";
 import { mkdir, readFile, writeFile, unlink } from "fs/promises";
 import path from "path";
 import type { FileKind, Prisma } from "@prisma/client";
+import { put as blobPut, get as blobGet, del as blobDel } from "@vercel/blob";
 import { db } from "./db";
 
 /**
@@ -22,20 +23,36 @@ function sniff(buf: Buffer): { mime: string; ext: string } | null {
 
 const safeName = (n: string) => n.replace(/[^\w.\- ()]+/g, "_").slice(0, 120) || "file";
 
+// Production (Vercel): set BLOB_READ_WRITE_TOKEN to use private Vercel Blob. Otherwise local disk.
+const useBlob = () => !!process.env.BLOB_READ_WRITE_TOKEN;
+
 async function put(key: string, buf: Buffer) {
+  if (useBlob()) {
+    await blobPut(key, buf, { access: "private", addRandomSuffix: false, allowOverwrite: false });
+    return;
+  }
   const full = path.join(ROOT, key);
   if (!full.startsWith(ROOT + path.sep)) throw new Error("bad key");
   await mkdir(path.dirname(full), { recursive: true });
   await writeFile(full, buf, { flag: "wx" });
 }
 
-async function get(key: string) {
+async function get(key: string): Promise<Buffer> {
+  if (useBlob()) {
+    const r = await blobGet(key, { access: "private" });
+    if (!r || r.statusCode !== 200 || !r.stream) throw new Error("file not found");
+    return Buffer.from(await new Response(r.stream).arrayBuffer());
+  }
   const full = path.join(ROOT, key);
   if (!full.startsWith(ROOT + path.sep)) throw new Error("bad key");
   return readFile(full);
 }
 
 export async function removeStored(key: string) {
+  if (useBlob()) {
+    await blobDel(key).catch(() => {});
+    return;
+  }
   await unlink(path.join(ROOT, key)).catch(() => {});
 }
 
